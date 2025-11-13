@@ -1,6 +1,7 @@
 streamlit
+langchain
+langchain-community
+langchain-core
+langchain-text-splitters
 sentence-transformers
-google-generativeai
-python-dotenv
-numpy
-pandas
+faiss-cpu
