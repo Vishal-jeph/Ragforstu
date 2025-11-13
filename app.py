@@ -7,12 +7,12 @@ import os
 st.set_page_config(page_title="Course RAG App", layout="wide")
 
 st.title("📚 Course RAG App")
-st.write("Ask questions based on your uploaded course indexes (Computer Networks, Data Mining, etc.)")
+st.write("Ask questions from your course indexes (Computer Networks, Data Mining, etc.)")
 
 INDEX_DIR = "indexes"
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# --- Load available index files ---
+# --- Load indexes ---
 def load_indexes():
     indexes = {}
     for file in os.listdir(INDEX_DIR):
@@ -28,7 +28,7 @@ def load_indexes():
 indexes = load_indexes()
 
 if not indexes:
-    st.error("No index files found in the 'indexes' folder. Please add files like `computer_networks_index.json` or `data_mining_index.json`.")
+    st.error("No index files found in 'indexes'. Please add JSON files like 'computer_networks_index.json'.")
     st.stop()
 
 subject = st.selectbox("Choose a subject", list(indexes.keys()))
@@ -37,21 +37,34 @@ query = st.text_input("Ask a question related to this subject:")
 if st.button("Search") and query:
     index_data = indexes[subject]
 
-    # If the file was saved as a dict instead of list, fix that
+    # Convert dict -> list if needed
     if isinstance(index_data, dict):
         index_data = list(index_data.values())
 
-    # If it’s still a list of strings, convert it to dicts with text only
-    if all(isinstance(i, str) for i in index_data):
+    # Detect data format
+    first_item = index_data[0] if len(index_data) > 0 else None
+
+    if isinstance(first_item, str):
+        # List of texts
         texts = index_data
         embeddings = model.encode(texts, convert_to_numpy=True)
+
+    elif isinstance(first_item, list) and len(first_item) == 2:
+        # List of [text, embedding]
+        texts = [i[0] for i in index_data]
+        embeddings = np.array([i[1] for i in index_data])
+
+    elif isinstance(first_item, dict):
+        # List of {"text": ..., "embedding": ...}
+        texts = [i["text"] for i in index_data]
+        embeddings = np.array([i["embedding"] for i in index_data])
+
     else:
-        # Otherwise assume it’s list of dicts with "text" and "embedding"
-        texts = [item["text"] for item in index_data]
-        embeddings = np.array([item["embedding"] for item in index_data])
+        st.error("❌ Unsupported JSON structure. Please check your index file format.")
+        st.stop()
 
+    # Encode query
     query_emb = model.encode(query, convert_to_numpy=True)
-
     cos_scores = util.cos_sim(query_emb, embeddings)[0]
     top_results = np.argsort(-cos_scores)[:5]
 
