@@ -1,88 +1,95 @@
 import streamlit as st
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import DirectoryLoader
 import os
 import json
-import numpy as np
-import pandas as pd
-from sentence_transformers import SentenceTransformer, util
-import google.generativeai as genai
-from dotenv import load_dotenv
 
 # -----------------------------
-# 1. Load environment variables
-# -----------------------------
-load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-# -----------------------------
-# 2. Load the pre-built index
+# Configuration
 # -----------------------------
 INDEX_DIR = "indexes"
-if not os.path.exists(INDEX_DIR):
-    st.error("⚠️ No index found. Please run build_index.py first.")
+DATA_DIR = "data"
+
+# -----------------------------
+# Initialize embeddings
+# -----------------------------
+@st.cache_resource
+def load_embeddings():
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+# -----------------------------
+# Load available subjects
+# -----------------------------
+def list_subjects():
+    return [f.split("_index.json")[0] for f in os.listdir(INDEX_DIR) if f.endswith("_index.json")]
+
+# -----------------------------
+# Load FAISS vectorstore for a given subject
+# -----------------------------
+@st.cache_resource
+def load_vectorstore(subject):
+    index_path = os.path.join(INDEX_DIR, f"{subject}_index.json")
+    if not os.path.exists(index_path):
+        st.error(f"Index file not found for subject: {subject}")
+        return None
+
+    embeddings = load_embeddings()
+    try:
+        vectorstore = FAISS.load_local(INDEX_DIR, embeddings, index_name=subject, allow_dangerous_deserialization=True)
+        return vectorstore
+    except Exception as e:
+        st.error(f"Error loading index for {subject}: {e}")
+        return None
+
+# -----------------------------
+# Streamlit UI
+# -----------------------------
+st.set_page_config(page_title="Department Research Search", layout="wide")
+st.title("🔍 Department Research Paper & Patent Search System")
+
+# Sidebar
+st.sidebar.header("Options")
+subjects = list_subjects()
+
+if not subjects:
+    st.sidebar.warning("No index files found in 'indexes/' folder.")
     st.stop()
 
-# Load embeddings and metadata
-with open(os.path.join(INDEX_DIR, "embeddings.json"), "r") as f:
-    embeddings_data = json.load(f)
+selected_subject = st.sidebar.selectbox("Select Subject", subjects)
+top_k = st.sidebar.slider("Number of results", 1, 10, 5)
 
-with open(os.path.join(INDEX_DIR, "metadata.json"), "r") as f:
-    metadata = json.load(f)
-
-# Convert list back to numpy array
-doc_embeddings = np.array(embeddings_data["embeddings"])
-docs = metadata["documents"]
+# Load vectorstore
+vectorstore = load_vectorstore(selected_subject)
+if not vectorstore:
+    st.stop()
 
 # -----------------------------
-# 3. Load embedding model
+# Search Functionality
 # -----------------------------
-model = SentenceTransformer("all-MiniLM-L6-v2")
+query = st.text_input("Enter your search query")
 
-# -----------------------------
-# 4. Streamlit App UI
-# -----------------------------
-st.title("📚 Department Research Paper & Patent Search")
-st.write("Search and summarize research papers or patents from your department database.")
-
-query = st.text_input("🔍 Enter your search query:")
-num_results = st.slider("Number of results to display", 1, 10, 5)
-
-# -----------------------------
-# 5. Perform Semantic Search
-# -----------------------------
 if query:
-    query_embedding = model.encode(query, convert_to_tensor=True)
-    cos_scores = util.cos_sim(query_embedding, doc_embeddings)[0].cpu().numpy()
-
-    # Fix: handle small arrays safely
-    k = min(num_results, len(cos_scores))
-    top_results = np.argpartition(-cos_scores, range(k))[:k]
-    top_results = top_results[np.argsort(-cos_scores[top_results])]
-
-    st.subheader("🔎 Top Matching Documents:")
-    for idx in top_results:
-        st.write(f"**{docs[idx][:150]}...**")
-        st.caption(f"Relevance Score: {cos_scores[idx]:.4f}")
-
-    # -----------------------------
-    # 6. Summarize / Generate Answer
-    # -----------------------------
-    if st.button("✨ Generate Summary using Gemini"):
-        context = "\n\n".join([docs[idx] for idx in top_results])
-        prompt = f"""You are an expert research assistant.
-Use the following research abstracts and patent summaries to answer the query:
-
-Query: {query}
-Context:
-{context}
-
-Provide a concise, well-structured summary with key findings and relevance.
-"""
-
+    with st.spinner("Searching..."):
         try:
-            gemini_model = genai.GenerativeModel("gemini-1.5-pro")
-            response = gemini_model.generate_content(prompt)
-            st.markdown("### 🧠 Gemini Summary")
-            st.write(response.text)
-
+            results = vectorstore.similarity_search(query, k=top_k)
+            if results:
+                st.success(f"Found {len(results)} relevant result(s):")
+                for i, res in enumerate(results, start=1):
+                    st.markdown(f"### {i}. {res.metadata.get('title', 'Untitled')}")
+                    st.markdown(f"**Score:** {res.metadata.get('score', 'N/A')}")
+                    st.markdown(f"**Content:** {res.page_content[:300]}...")
+                    st.markdown("---")
+            else:
+                st.warning("No results found for this query.")
         except Exception as e:
-            st.error(f"❌ Gemini API Error: {e}")
+            st.error(f"Search failed: {e}")
+else:
+    st.info("Enter a query above to start searching.")
+
+# -----------------------------
+# Developer Info
+# -----------------------------
+st.markdown("---")
+st.caption("Developed by Vishal | Powered by FAISS + LangChain + Streamlit")
