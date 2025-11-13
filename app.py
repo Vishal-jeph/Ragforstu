@@ -1,75 +1,52 @@
 import streamlit as st
 import json
 import numpy as np
-from sentence_transformers import SentenceTransformer, util
-import os
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
-st.set_page_config(page_title="Course RAG App", layout="wide")
+st.set_page_config(page_title="Research Paper & Patent Search", layout="wide")
 
-st.title("📚 Course RAG App")
-st.write("Ask questions from your course indexes (Computer Networks, Data Mining, etc.)")
+st.title("🔍 Research Paper & Patent Search System")
+st.write("Upload your precomputed embeddings JSON file and ask questions to find the most relevant entries.")
 
-INDEX_DIR = "indexes"
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# File uploader
+uploaded_file = st.file_uploader("Upload your index file (JSON)", type=["json"])
 
-# --- Load indexes ---
-def load_indexes():
-    indexes = {}
-    for file in os.listdir(INDEX_DIR):
-        if file.endswith("_index.json"):
-            subject = file.replace("_index.json", "")
-            with open(os.path.join(INDEX_DIR, file), "r", encoding="utf-8") as f:
-                try:
-                    indexes[subject] = json.load(f)
-                except Exception as e:
-                    st.warning(f"⚠️ Error loading {file}: {e}")
-    return indexes
+# Load model
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-indexes = load_indexes()
+model = load_model()
 
-if not indexes:
-    st.error("No index files found in 'indexes'. Please add JSON files like 'computer_networks_index.json'.")
-    st.stop()
+if uploaded_file:
+    try:
+        index_data = json.load(uploaded_file)
 
-subject = st.selectbox("Choose a subject", list(indexes.keys()))
-query = st.text_input("Ask a question related to this subject:")
+        # ✅ Handle both supported formats
+        if isinstance(index_data, dict) and "texts" in index_data and "embeddings" in index_data:
+            texts = index_data["texts"]
+            embeddings = np.array(index_data["embeddings"])
+        elif isinstance(index_data, list) and "text" in index_data[0]:
+            texts = [item["text"] for item in index_data]
+            embeddings = np.array([item["embedding"] for item in index_data])
+        else:
+            st.error("❌ Unsupported JSON structure. Please ensure your file has either {'texts': [...], 'embeddings': [...]} or [{'text': ..., 'embedding': [...]}].")
+            st.stop()
 
-if st.button("Search") and query:
-    index_data = indexes[subject]
+        # Search box
+        query = st.text_input("Enter your query:")
+        if query:
+            query_emb = model.encode(query, convert_to_numpy=True)
+            similarities = cosine_similarity([query_emb], embeddings)[0]
+            top_k = min(5, len(similarities))
+            top_indices = np.argsort(similarities)[::-1][:top_k]
 
-    # Convert dict -> list if needed
-    if isinstance(index_data, dict):
-        index_data = list(index_data.values())
+            st.subheader("Top Results:")
+            for i, idx in enumerate(top_indices):
+                st.markdown(f"**Result {i+1} (Score: {similarities[idx]:.3f})**")
+                st.write(texts[idx])
+                st.divider()
 
-    # Detect data format
-    first_item = index_data[0] if len(index_data) > 0 else None
-
-    if isinstance(first_item, str):
-        # List of texts
-        texts = index_data
-        embeddings = model.encode(texts, convert_to_numpy=True)
-
-    elif isinstance(first_item, list) and len(first_item) == 2:
-        # List of [text, embedding]
-        texts = [i[0] for i in index_data]
-        embeddings = np.array([i[1] for i in index_data])
-
-    elif isinstance(first_item, dict):
-        # List of {"text": ..., "embedding": ...}
-        texts = [i["text"] for i in index_data]
-        embeddings = np.array([i["embedding"] for i in index_data])
-
-    else:
-        st.error("❌ Unsupported JSON structure. Please check your index file format.")
-        st.stop()
-
-    # Encode query
-    query_emb = model.encode(query, convert_to_numpy=True)
-    cos_scores = util.cos_sim(query_emb, embeddings)[0]
-    top_results = np.argsort(-cos_scores)[:5]
-
-    st.subheader("Top Matching Results:")
-    for idx in top_results:
-        st.write(f"**Score:** {cos_scores[idx]:.4f}")
-        st.write(texts[idx])
-        st.markdown("---")
+    except Exception as e:
+        st.error(f"❌ Error reading or processing JSON: {e}")
