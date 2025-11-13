@@ -1,61 +1,62 @@
 import streamlit as st
-import os
 import json
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
+import os
 
-# ------------------ CONFIG ------------------
+st.set_page_config(page_title="Course RAG App", layout="wide")
+
+st.title("📚 Course RAG App")
+st.write("Ask questions based on your uploaded course indexes (Computer Networks, Data Mining, etc.)")
+
 INDEX_DIR = "indexes"
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# ------------------ LOAD MODEL ------------------
-@st.cache_resource
-def load_model():
-    return SentenceTransformer(MODEL_NAME)
-
-model = load_model()
-
-# ------------------ LOAD AVAILABLE INDEXES ------------------
-def load_json_indexes():
+# --- Load available index files ---
+def load_indexes():
     indexes = {}
     for file in os.listdir(INDEX_DIR):
         if file.endswith("_index.json"):
             subject = file.replace("_index.json", "")
-            with open(os.path.join(INDEX_DIR, file), "r") as f:
-                data = json.load(f)
-            indexes[subject] = data
+            with open(os.path.join(INDEX_DIR, file), "r", encoding="utf-8") as f:
+                try:
+                    indexes[subject] = json.load(f)
+                except Exception as e:
+                    st.warning(f"⚠️ Error loading {file}: {e}")
     return indexes
 
-indexes = load_json_indexes()
+indexes = load_indexes()
+
 if not indexes:
-    st.error("No JSON indexes found in the 'indexes/' folder.")
+    st.error("No index files found in the 'indexes' folder. Please add files like `computer_networks_index.json` or `data_mining_index.json`.")
     st.stop()
 
-# ------------------ STREAMLIT UI ------------------
-st.title("📚 Course RAG App (JSON-based)")
-subject = st.selectbox("Select Subject", list(indexes.keys()))
-query = st.text_input("Enter your question:")
+subject = st.selectbox("Choose a subject", list(indexes.keys()))
+query = st.text_input("Ask a question related to this subject:")
 
 if st.button("Search") and query:
     index_data = indexes[subject]
 
-    # Load texts and embeddings
-    texts = [item["text"] for item in index_data]
-    embeddings = np.array([item["embedding"] for item in index_data])
+    # If the file was saved as a dict instead of list, fix that
+    if isinstance(index_data, dict):
+        index_data = list(index_data.values())
 
-    # Encode query
-    query_embedding = model.encode(query, convert_to_tensor=True)
+    # If it’s still a list of strings, convert it to dicts with text only
+    if all(isinstance(i, str) for i in index_data):
+        texts = index_data
+        embeddings = model.encode(texts, convert_to_numpy=True)
+    else:
+        # Otherwise assume it’s list of dicts with "text" and "embedding"
+        texts = [item["text"] for item in index_data]
+        embeddings = np.array([item["embedding"] for item in index_data])
 
-    # Compute cosine similarity
-    cos_scores = util.cos_sim(query_embedding, embeddings)[0].cpu().numpy()
+    query_emb = model.encode(query, convert_to_numpy=True)
 
-    # Get top 5
-    top_indices = np.argsort(cos_scores)[-5:][::-1]
+    cos_scores = util.cos_sim(query_emb, embeddings)[0]
+    top_results = np.argsort(-cos_scores)[:5]
 
-    st.subheader("🔍 Top Relevant Results:")
-    for idx in top_indices:
+    st.subheader("Top Matching Results:")
+    for idx in top_results:
         st.write(f"**Score:** {cos_scores[idx]:.4f}")
         st.write(texts[idx])
         st.markdown("---")
-
-st.caption("Built with ❤️ using Sentence Transformers + Streamlit")
