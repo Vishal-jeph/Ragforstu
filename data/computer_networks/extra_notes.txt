@@ -1,0 +1,3 @@
+so the most important chapter for end sem is 4th, network layer give it the most time try numerical of subnets distance vector and path vector
+in 5th chapter CRC and hamming code is important and Ethernet frame format is also important
+chapter 6 is not too important and mostly it will be of max 5 marks in the end sem exam
