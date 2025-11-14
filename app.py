@@ -1,59 +1,65 @@
 import streamlit as st
-import json
-import numpy as np
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+import json
+import os
 
-st.set_page_config(page_title="Department Research & Paper Search", layout="wide")
+st.set_page_config(page_title="Department RAG Q&A", page_icon="📘", layout="wide")
+st.title("🎓 Department Q&A System")
 
-st.title("🎓 Department Research & Paper Search System")
+# Path to indexes folder
+INDEX_DIR = "indexes"
 
-# ✅ Load model only once
+# Load indexes
+indexes = {}
+for filename in os.listdir(INDEX_DIR):
+    if filename.endswith("_index.json"):
+        subject = filename.replace("_index.json", "")
+        try:
+            with open(os.path.join(INDEX_DIR, filename), "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "texts" in data and "embeddings" in data:
+                    indexes[subject] = data
+                else:
+                    st.warning(f"⚠️ {filename} has invalid structure — missing 'texts' or 'embeddings'")
+        except Exception as e:
+            st.error(f"❌ Error loading {filename}: {e}")
+
+if not indexes:
+    st.error("No valid index files found in the 'indexes' folder.")
+    st.stop()
+
+# Subject selection
+subject = st.selectbox("Select Subject:", list(indexes.keys()))
+
+# Load model
 @st.cache_resource
 def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 model = load_model()
 
-# ✅ Load all subject indexes automatically
-def load_index(subject):
-    path = f"indexes/{subject}_index.json"
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+# User query
+query = st.text_input("Ask your question:")
 
-    if isinstance(data, dict) and "texts" in data and "embeddings" in data:
-        texts = data["texts"]
-        embeddings = np.array(data["embeddings"])
-    elif isinstance(data, list) and "text" in data[0]:
-        texts = [item["text"] for item in data]
-        embeddings = np.array([item["embedding"] for item in data])
-    else:
-        raise ValueError(f"Unsupported JSON structure in {path}")
-
-    return texts, embeddings
-
-
-# ✅ Sidebar for subject selection
-st.sidebar.header("Select Subject")
-subjects = ["computer_networks", "data_mining"]
-subject = st.sidebar.selectbox("Choose a subject:", subjects)
-
-try:
-    texts, embeddings = load_index(subject)
-except Exception as e:
-    st.error(f"Error loading {subject} index: {e}")
-    st.stop()
-
-# ✅ Main interface
-query = st.text_input("Ask a question related to the subject:")
 if query:
+    index_data = indexes[subject]
+    texts = index_data["texts"]
+    embeddings = np.array(index_data["embeddings"])
+
+    # Encode query
     query_emb = model.encode(query, convert_to_numpy=True)
-    similarities = cosine_similarity([query_emb], embeddings)[0]
-    top_k = min(5, len(similarities))
-    top_indices = np.argsort(similarities)[::-1][:top_k]
+
+    # Compute cosine similarity
+    similarities = np.dot(embeddings, query_emb) / (
+        np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_emb)
+    )
+
+    # Get top 3 results
+    top_indices = similarities.argsort()[-3:][::-1]
 
     st.subheader("Top Relevant Answers:")
     for i, idx in enumerate(top_indices):
         st.markdown(f"**Result {i+1} (Similarity: {similarities[idx]:.3f})**")
         st.write(texts[idx])
-        st.divider()
+        st.markdown("---")
