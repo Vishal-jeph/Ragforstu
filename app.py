@@ -24,9 +24,8 @@ def load_index(file_path):
 
 # SUBJECT OPTIONS
 subjects = {
-    "Computer Networks": "indexes/computer_networks.json",
-    "Data Science": "indexes/data_science.json",
-    "Machine Learning": "indexes/machine_learning.json",
+    "Computer Networks": "indexes/computer_networks_index.json",
+    "Data Science": "indexes/data_mining_index.json",
 }
 
 subject = st.selectbox("Select Subject", options=list(subjects.keys()))
